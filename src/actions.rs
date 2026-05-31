@@ -1,17 +1,20 @@
-/// Interactive fix-runner and shared quick-win command table.
+/// Shared quick-win command table and post-TUI executor.
 ///
-/// `QUICK_WIN_COMMANDS` is the single source of truth for the 6 quick-win
-/// commands; both `reporter.rs` and this module reference it to avoid drift.
+/// `QUICK_WIN_COMMANDS` is the single source of truth for the quick-win
+/// commands; both `reporter.rs` and `tui.rs` reference it to avoid drift.
+///
+/// `execute_selected` is called **after** the TUI exits (in normal terminal
+/// mode) so that `sudo` password prompts render correctly in the user's
+/// shell rather than inside the alternate-screen buffer.
 
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
 
 // ─── Shared command table ─────────────────────────────────────────────────────
 
-/// Quick-win commands shown in the report and offered in the interactive menu.
+/// Quick-win commands shown in the report and offered in the interactive TUI.
 ///
 /// Each entry is `(label, shell_command)`.  Commands that contain `sudo`
-/// trigger an admin-password warning before execution.
+/// trigger an admin-password prompt when executed.
 pub const QUICK_WIN_COMMANDS: &[(&str, &str)] = &[
     (
         "Flush DNS cache",
@@ -33,107 +36,42 @@ pub const QUICK_WIN_COMMANDS: &[(&str, &str)] = &[
     ),
 ];
 
-// ─── Interactive menu ─────────────────────────────────────────────────────────
+// ─── Post-TUI executor ────────────────────────────────────────────────────────
 
-/// Display the interactive fix-runner after the report.
+/// Run the commands chosen by the user in the TUI.
 ///
-/// * Presents `QUICK_WIN_COMMANDS` via a `MultiSelect` prompt.
-/// * Confirms before executing anything.
-/// * Warns when a selected command requires `sudo`.
-/// * Runs each command via `sh -c` so shell features (`;`, `~`) work.
+/// `indices` is the list of `QUICK_WIN_COMMANDS` indices returned by
+/// `tui::run()`.  Each command is run via `sh -c` so shell features
+/// (`;`, `~`, redirections) work correctly.
 ///
-/// Call only when `stdout().is_terminal()` is `true` and `--no-interactive`
-/// was not passed.
-pub fn run_interactive_menu() {
-    println!(
-        "\n\n{}",
-        "  🔧  INTERACTIVE FIX RUNNER  ".on_blue().white().bold()
-    );
-    println!(
-        "  {}\n",
-        "Space = toggle  ·  Enter = confirm  ·  Ctrl-C = skip".dimmed()
-    );
-
-    // Build display labels with sudo indicator
-    let labels: Vec<String> = QUICK_WIN_COMMANDS
-        .iter()
-        .map(|(label, cmd)| {
-            if cmd.contains("sudo") {
-                format!("{label}  🔐")
-            } else {
-                label.to_string()
-            }
-        })
-        .collect();
-
-    let theme = ColorfulTheme::default();
-
-    let selection = match MultiSelect::with_theme(&theme)
-        .items(&labels)
-        .with_prompt("Choose quick-win actions to run")
-        .interact()
-    {
-        Ok(s) => s,
-        Err(_) => {
-            println!(
-                "\n  {} Interactive menu cancelled — no changes made.",
-                "ℹ️ ".dimmed()
-            );
-            return;
-        }
-    };
-
-    if selection.is_empty() {
-        println!(
-            "\n  {} Nothing selected — no changes made.",
-            "✅".green()
-        );
+/// This function must be called **outside** the ratatui alternate screen so
+/// that `sudo` prompts and command output render in the user's normal terminal.
+pub fn execute_selected(indices: &[usize]) {
+    if indices.is_empty() {
         return;
     }
 
-    // Preview selected commands
     println!(
-        "\n  {} About to run {} action(s):\n",
-        "⚡".yellow(),
-        selection.len()
+        "\n\n{}",
+        "  ⚡  RUNNING SELECTED ACTIONS  ".on_blue().white().bold()
     );
-    for &idx in &selection {
-        let (label, cmd) = QUICK_WIN_COMMANDS[idx];
-        println!("  {}  ", format!("# {label}").dimmed());
-        println!("  {}\n", cmd.green());
-    }
 
-    // Warn about sudo before the confirmation gate
-    let needs_sudo = selection
+    // Warn if any selected command requires sudo
+    let needs_sudo = indices
         .iter()
-        .any(|&idx| QUICK_WIN_COMMANDS[idx].1.contains("sudo"));
+        .any(|&i| QUICK_WIN_COMMANDS[i].1.contains("sudo"));
 
     if needs_sudo {
         println!(
-            "  {} {} One or more selected commands require elevated privileges.\n\
+            "\n  {} {} One or more commands require elevated privileges.\n\
              \t  Your terminal will prompt for your admin password.\n",
             "🔐".yellow(),
             "Heads up:".yellow().bold()
         );
     }
 
-    let confirmed = Confirm::with_theme(&theme)
-        .with_prompt("Run selected actions now?")
-        .default(false)
-        .interact()
-        .unwrap_or(false);
-
-    if !confirmed {
-        println!(
-            "\n  {} Run cancelled — no changes made.",
-            "ℹ️ ".dimmed()
-        );
-        return;
-    }
-
-    // ── Execute ────────────────────────────────────────────────────────────────
     println!();
-    for &idx in &selection {
+    for &idx in indices {
         let (label, cmd) = QUICK_WIN_COMMANDS[idx];
         println!(
             "  {}  {}\n",

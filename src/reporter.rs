@@ -258,6 +258,131 @@ fn save_report_file(path: &PathBuf, lines: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+// ─── Save-only report (used by interactive TUI mode) ─────────────────────────
+
+/// Write a plain-text report to `path` without printing anything to stdout.
+///
+/// Used when the interactive TUI already showed all details to the user and
+/// we just want a persisted copy on disk.
+pub fn save_report(
+    results: &[CheckResult],
+    health: &HealthScore,
+    path: &PathBuf,
+) -> anyhow::Result<()> {
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push(
+        "═══════════════════ alchemy-cleaner — macOS System Health Diagnostic ═══════════════════"
+            .into(),
+    );
+
+    // ── Sections ──────────────────────────────────────────────────────────
+    for (i, result) in results.iter().enumerate() {
+        let header = format!("{}. {}", i + 1, result.section.to_uppercase());
+        lines.push(format!("\n{}", "═".repeat(WIDTH)));
+        lines.push(format!("  {header}"));
+        lines.push("─".repeat(WIDTH));
+
+        for (k, v) in &result.details {
+            lines.push(format!("  {:<24} {}", k, v));
+        }
+
+        for finding in &result.findings {
+            let icon = match finding.level {
+                Level::Ok       => "✅",
+                Level::Warn     => "⚠️ ",
+                Level::Critical => "❌",
+            };
+            lines.push(format!("  [{icon}] {}", finding.message));
+        }
+    }
+
+    // ── Score & verdict ────────────────────────────────────────────────────
+    lines.push("\n".into());
+    lines.push("═══ FINAL HEALTH SCORE & VERDICT ═══".into());
+    let score_str = format!("{}/100", health.score);
+    let bar = health.bar(40);
+    lines.push(format!("  Health Score: {score_str}  [{bar}]"));
+    lines.push(format!(
+        "  Verdict     : {} {}",
+        health.verdict.icon(),
+        health.verdict.label()
+    ));
+    lines.push("\n  Should you erase and reinstall macOS?".into());
+    lines.push("  (\"Erase All Content and Settings\" / Recovery Mode)".into());
+
+    if health.smart_failure {
+        lines.push(
+            "  ⚠  HARDWARE ISSUE — S.M.A.R.T. failure detected. \
+             Back up NOW and book Apple Support.\n  Erasing will NOT fix failing hardware."
+                .into(),
+        );
+    } else {
+        match health.verdict.erase_recommendation(health.panic_count, health.smart_failure) {
+            EraseRecommendation::NotNeeded => {
+                lines.push(format!(
+                    "  ✅  NOT recommended. Score {}/100 — fix the issues below first.",
+                    health.score
+                ));
+            }
+            EraseRecommendation::TryOtherFirst => {
+                lines.push(format!(
+                    "  ⚠️   Score {}/100 — action needed, but no evidence of software corruption.",
+                    health.score
+                ));
+                lines.push(
+                    "  If issues are memory/swap related: this is a capacity problem.\n  \
+                     Close unused apps, quit browser tabs, or restart to free RAM.\n  \
+                     Erasing macOS will NOT fix RAM exhaustion — only more RAM or fewer apps will."
+                        .into(),
+                );
+            }
+            EraseRecommendation::Recommended => {
+                lines.push(format!(
+                    "  🚨  Score {}/100 + {} kernel panic(s) detected → ERASE & REINSTALL recommended.",
+                    health.score, health.panic_count
+                ));
+                lines.push(
+                    "  Apple Silicon: System Settings → General → Transfer or Reset → Erase All Content."
+                        .into(),
+                );
+                lines.push(
+                    "  Intel: hold ⌘+R at boot → Disk Utility Erase → Reinstall macOS.".into(),
+                );
+            }
+        }
+    }
+
+    // ── Issues & solutions ─────────────────────────────────────────────────
+    let actionable: Vec<_> = results
+        .iter()
+        .flat_map(|r| r.findings.iter())
+        .filter(|f| f.solution.is_some() && f.score_deduction > 0)
+        .collect();
+
+    if actionable.is_empty() {
+        lines.push("\n  No issues found — system is in great shape!".into());
+    } else {
+        lines.push("\n═══ ISSUES & SOLUTIONS ═══".into());
+        for (i, finding) in actionable.iter().enumerate() {
+            let num = i + 1;
+            lines.push(format!("\n  Issue {num}: → {}", finding.message));
+            if let Some(sol) = &finding.solution {
+                lines.push(format!("  Fix:\n    {}", sol.replace('\n', "\n    ")));
+            }
+        }
+    }
+
+    // ── Quick wins ─────────────────────────────────────────────────────────
+    lines.push("\n⚡ QUICK WIN COMMANDS".into());
+    for (label, cmd) in QUICK_WIN_COMMANDS {
+        lines.push(format!("  # {label}"));
+        lines.push(format!("  {cmd}\n"));
+    }
+
+    save_report_file(path, &lines)
+}
+
 // ─── Helper for printing list of available checkers ──────────────────────────
 
 pub fn print_checker_list(checkers: &[Box<dyn crate::checker::Checker>]) {

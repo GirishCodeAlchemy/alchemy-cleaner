@@ -5,6 +5,7 @@ mod config;
 mod reporter;
 mod scorer;
 mod checkers;
+mod tui;
 
 use chrono::Local;
 use clap::Parser;
@@ -12,9 +13,11 @@ use colored::Colorize;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::io::IsTerminal as _;
 use std::path::PathBuf;
+use std::sync::{mpsc, Arc};
+use std::thread;
 use std::time::Duration;
 
-use crate::checker::{CheckResult, Level};
+use crate::tui::ScanMsg;
 use cli::Cli;
 use config::Config;
 
@@ -27,12 +30,12 @@ fn main() {
     }
 
     // ── Build runtime config ───────────────────────────────────────────────
-    let config = Config {
+    let config = Arc::new(Config {
         with_sudo:   args.with_sudo,
         only:        args.only.clone(),
         save_report: !args.no_report,
         no_color:    args.no_color,
-    };
+    });
 
     // ── Collect all registered checkers ───────────────────────────────────
     let all = checkers::all_checkers();
@@ -44,10 +47,10 @@ fn main() {
     }
 
     // ── Filter checkers if --only was provided ─────────────────────────────
-    let to_run: Vec<_> = if config.only.is_empty() {
-        all.iter().collect()
+    let to_run: Vec<Box<dyn checker::Checker>> = if config.only.is_empty() {
+        all.into_iter().collect()
     } else {
-        all.iter()
+        all.into_iter()
             .filter(|c| {
                 config.only.iter().any(|name| c.name().eq_ignore_ascii_case(name))
             })
@@ -63,52 +66,9 @@ fn main() {
         std::process::exit(1);
     }
 
-    // ── Run each checker with a live spinner ───────────────────────────────
-    let is_tty = std::io::stdout().is_terminal();
-
-    let pb = ProgressBar::new_spinner();
-    if is_tty {
-        pb.set_style(
-            ProgressStyle::default_spinner()
-                .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-                .template("{spinner:.cyan}  {msg}")
-                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
-        );
-        pb.enable_steady_tick(Duration::from_millis(80));
-    }
-
+    // Snapshot names and count before consuming to_run into threads.
+    let checker_names: Vec<String> = to_run.iter().map(|c| c.name().to_string()).collect();
     let total = to_run.len();
-    let mut results: Vec<CheckResult> = Vec::with_capacity(total);
-
-    for (i, c) in to_run.iter().enumerate() {
-        if is_tty {
-            pb.set_message(format!(
-                "[{}/{}]  {}...",
-                i + 1,
-                total,
-                c.name()
-            ));
-        }
-
-        let result = c.run(&config);
-        let icon = section_icon(&result);
-
-        if is_tty {
-            pb.println(format!(
-                "  {}  {} {}",
-                icon,
-                c.name().bold(),
-                format!("({}/{})", i + 1, total).dimmed()
-            ));
-        }
-
-        results.push(result);
-    }
-
-    pb.finish_and_clear();
-
-    // ── Compute health score ───────────────────────────────────────────────
-    let health = scorer::HealthScore::compute(&results);
 
     // ── Report file path ───────────────────────────────────────────────────
     let report_path: Option<PathBuf> = if config.save_report {
@@ -119,19 +79,108 @@ fn main() {
         None
     };
 
-    // ── Print full report to stdout (and optionally to a file) ────────────
-    reporter::print_report(&results, &health, report_path.as_ref());
+    // ── Spawn all checkers in parallel ────────────────────────────────────
+    let (tx, rx) = mpsc::channel::<ScanMsg>();
 
-    // ── Interactive fix-runner — only when running in a real terminal ──────
+    for (i, checker) in to_run.into_iter().enumerate() {
+        let tx_clone = tx.clone();
+        let cfg      = Arc::clone(&config);
+        thread::spawn(move || {
+            let _ = tx_clone.send(ScanMsg::Started(i));
+            let result = checker.run(&cfg);
+            let _ = tx_clone.send(ScanMsg::Done(i, result));
+        });
+    }
+    // Drop the original sender so the channel closes when all threads finish.
+    drop(tx);
+
+    // ── Run mode: interactive TUI or plain-text stdout ────────────────────
+    let is_tty      = std::io::stdout().is_terminal();
     let interactive = is_tty && !args.no_interactive;
+
     if interactive {
-        actions::run_interactive_menu();
+        // TUI takes the receiver and drives the live display itself.
+        let report_str = report_path.as_ref().map(|p| p.to_string_lossy().into_owned());
+
+        match tui::run(checker_names, rx, report_str.as_deref()) {
+            Ok(output) => {
+                let health = scorer::HealthScore::compute(&output.results);
+
+                // Save report file (quietly — user already saw everything in the TUI).
+                if let Some(path) = &report_path {
+                    match reporter::save_report(&output.results, &health, path) {
+                        Ok(()) => println!(
+                            "\n  {} Report saved to: {}\n",
+                            "📄".green(),
+                            path.display().to_string().bold()
+                        ),
+                        Err(e) => eprintln!("  Warning: could not save report file: {e}"),
+                    }
+                }
+
+                // Execute quick-win actions the user selected in the TUI.
+                if !output.pending.is_empty() {
+                    actions::execute_selected(&output.pending);
+                }
+            }
+            Err(e) => eprintln!("TUI error: {e}"),
+        }
+    } else {
+        // ── Non-interactive: spinner + full stdout report ──────────────────
+        let pb = ProgressBar::new_spinner();
+        if is_tty {
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
+                    .template("{spinner:.cyan}  {msg}")
+                    .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+            );
+            pb.enable_steady_tick(Duration::from_millis(80));
+        }
+
+        // Accumulate results in original index order (threads finish out of order).
+        let mut results: Vec<Option<checker::CheckResult>> = (0..total).map(|_| None).collect();
+        let mut done_count = 0usize;
+
+        for msg in rx {
+            match msg {
+                ScanMsg::Started(i) => {
+                    if is_tty {
+                        pb.set_message(format!(
+                            "[{}/{}]  {}...",
+                            done_count + 1, total, checker_names[i]
+                        ));
+                    }
+                }
+                ScanMsg::Done(i, result) => {
+                    let icon = section_icon(&result);
+                    if is_tty {
+                        pb.println(format!(
+                            "  {}  {} {}",
+                            icon,
+                            checker_names[i].bold(),
+                            format!("({}/{})", done_count + 1, total).dimmed()
+                        ));
+                    }
+                    results[i] = Some(result);
+                    done_count += 1;
+                }
+            }
+        }
+
+        pb.finish_and_clear();
+
+        let results: Vec<checker::CheckResult> = results.into_iter().flatten().collect();
+        let health = scorer::HealthScore::compute(&results);
+
+        reporter::print_report(&results, &health, report_path.as_ref());
     }
 }
 
 // ─── Helper — icon for a completed checker section ───────────────────────────
 
-fn section_icon(result: &CheckResult) -> &'static str {
+fn section_icon(result: &checker::CheckResult) -> &'static str {
+    use crate::checker::Level;
     let max = result
         .findings
         .iter()
@@ -140,8 +189,8 @@ fn section_icon(result: &CheckResult) -> &'static str {
         .unwrap_or(&Level::Ok);
 
     match max {
-        Level::Ok   => "✅",
-        Level::Warn => "⚠️ ",
+        Level::Ok       => "✅",
+        Level::Warn     => "⚠️ ",
         Level::Critical => "❌",
     }
 }
