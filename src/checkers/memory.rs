@@ -130,23 +130,23 @@ impl Checker for MemoryChecker {
                 .lines()
                 .find(|l| l.contains("System-wide memory free percentage"))
                 .unwrap_or("unavailable");
-            result.add_detail("memory_pressure", pressure_line.trim().to_string());
+            result.add_detail("memory_pressure", pressure_line.trim());
 
             if output.contains("Critical") {
                 result.add_finding(Finding::critical(
-                    "System reports CRITICAL memory pressure.".to_string(),
+                    "System reports CRITICAL memory pressure.",
                     "Immediately close memory-heavy apps. Restart if sluggish.\n\
                      Persistent critical pressure means you need more RAM.",
                     20,
                 ));
             } else if output.contains("Warn") {
                 result.add_finding(Finding::warn(
-                    "System reports WARNING memory pressure.".to_string(),
+                    "System reports WARNING memory pressure.",
                     "Close browser tabs, quit apps running in background (Slack, Teams, Spotify).",
                     8,
                 ));
             } else {
-                result.add_finding(Finding::ok("Memory pressure is at a normal level.".to_string()));
+                result.add_finding(Finding::ok("Memory pressure is at a normal level."));
             }
         }
 

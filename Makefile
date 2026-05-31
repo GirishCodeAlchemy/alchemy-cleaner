@@ -20,7 +20,7 @@ CARGO    := cargo
 RELEASE  := target/release/$(BINARY)
 DEBUG    := target/debug/$(BINARY)
 
-.PHONY: all dev run check lint fmt fmt-check test clean install uninstall list help
+.PHONY: all dev run run-no-report run-no-interactive check lint fmt fmt-check test clean install uninstall list help
 
 # ── Default: release build ────────────────────────────────────────────────────
 all: $(RELEASE)
@@ -41,6 +41,10 @@ run: $(RELEASE)
 # ── Run with no report saved ──────────────────────────────────────────────────
 run-no-report: $(RELEASE)
 	./$(RELEASE) --no-report
+
+# ── Run without the interactive fix-runner menu ───────────────────────────────
+run-no-interactive: $(RELEASE)
+	./$(RELEASE) --no-interactive
 
 # ── Cargo check (fast, no codegen) ───────────────────────────────────────────
 check:
@@ -85,8 +89,9 @@ help:
 	@echo ""
 	@echo "  make              Release build (optimised)"
 	@echo "  make dev          Debug build"
-	@echo "  make run          Release build + run full diagnostic"
-	@echo "  make run-no-report  Run without saving a Desktop report"
+	@echo "  make run              Release build + run full diagnostic"
+	@echo "  make run-no-report    Run without saving a Desktop report"
+	@echo "  make run-no-interactive  Run without the interactive fix-runner menu"
 	@echo "  make check        Syntax/type check only (no binary)"
 	@echo "  make lint         Clippy lints (warnings = errors)"
 	@echo "  make fmt          Auto-format with rustfmt"

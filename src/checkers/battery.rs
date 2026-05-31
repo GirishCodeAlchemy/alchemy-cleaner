@@ -20,7 +20,7 @@ impl Checker for BatteryChecker {
             Some(s) if !s.is_empty() => s,
             _ => {
                 result.add_finding(Finding::ok(
-                    "Battery information not available (desktop Mac or system_profiler failed).".to_string()
+                    "Battery information not available (desktop Mac or system_profiler failed)."
                 ));
                 return result;
             }

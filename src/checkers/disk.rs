@@ -59,7 +59,7 @@ impl Checker for DiskChecker {
                 ));
             }
         } else {
-            result.add_detail("Boot Volume", "Not found via sysinfo".to_string());
+            result.add_detail("Boot Volume", "Not found via sysinfo");
         }
 
         // ── S.M.A.R.T. status (macOS diskutil) ────────────────────────────
@@ -71,7 +71,7 @@ impl Checker for DiskChecker {
                 .map(str::trim)
                 .unwrap_or("Not Available");
 
-            result.add_detail("S.M.A.R.T. Status", smart.to_string());
+            result.add_detail("S.M.A.R.T. Status", smart);
 
             let smart_lower = smart.to_lowercase();
             if smart_lower.contains("fail") {
@@ -85,7 +85,7 @@ impl Checker for DiskChecker {
             } else if smart_lower.contains("verified") || smart_lower.contains("ok") || smart_lower.contains("passed") {
                 result.add_finding(Finding::ok(format!("S.M.A.R.T. Status: {smart} — drive health is good.")));
             } else {
-                result.add_detail("S.M.A.R.T. Note", "Status unclear — may be an APFS container".to_string());
+                result.add_detail("S.M.A.R.T. Note", "Status unclear — may be an APFS container");
             }
         }
 
@@ -102,7 +102,7 @@ impl Checker for DiskChecker {
 
         // ── Largest home directories (top 6, using du) ────────────────────
         result.add_detail("Large Home Dirs (top 6)", String::new());
-        if let Some(home) = std::env::var("HOME").ok() {
+        if let Ok(home) = std::env::var("HOME") {
             let pattern = format!("{home}/*/");
             if let Some(out) = cmd_output("sh", &["-c", &format!("du -sh {pattern} 2>/dev/null | sort -rh | head -6")]) {
                 for line in out.lines() {
@@ -110,7 +110,7 @@ impl Checker for DiskChecker {
                     let size = parts.next().unwrap_or("?");
                     let path = parts.next().unwrap_or("?")
                         .replace(&home, "~");
-                    result.add_detail(format!("  {path}"), size.to_string());
+                    result.add_detail(format!("  {path}"), size);
                 }
             }
         }

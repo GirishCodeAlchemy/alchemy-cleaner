@@ -50,7 +50,7 @@ impl Checker for StartupChecker {
                 }
             }
             _ => {
-                result.add_detail("GUI Login Items", "Unavailable (permission denied)".to_string());
+                result.add_detail("GUI Login Items", "Unavailable (permission denied)");
             }
         }
 

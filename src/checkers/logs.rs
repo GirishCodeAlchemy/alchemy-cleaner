@@ -50,12 +50,12 @@ impl Checker for LogsChecker {
             ));
         } else if panic_count == 1 {
             result.add_finding(Finding::warn(
-                "1 kernel panic in the last 30 days. Isolated incidents are usually not alarming.".to_string(),
+                "1 kernel panic in the last 30 days. Isolated incidents are usually not alarming.",
                 "Monitor for recurrence. A single panic can result from a force-shutdown.",
                 2,
             ));
         } else {
-            result.add_finding(Finding::ok("No kernel panics in the last 30 days. ✨".to_string()));
+            result.add_finding(Finding::ok("No kernel panics in the last 30 days. ✨"));
         }
 
         // ── Application crashes (last 7 days) ─────────────────────────────

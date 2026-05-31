@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write as IoWrite;
 use std::path::PathBuf;
 
+use crate::actions::QUICK_WIN_COMMANDS;
 use crate::checker::{CheckResult, Level};
 use crate::scorer::{EraseRecommendation, HealthScore, Verdict};
 
@@ -237,19 +238,10 @@ fn print_quick_wins(plain: &mut Vec<String>) {
     println!("{}", "  ⚡  QUICK WIN COMMANDS (safe to run manually)  ".cyan().bold());
     println!("{}\n", "─".repeat(WIDTH).dimmed());
 
-    let commands = [
-        ("Flush DNS cache", "sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder"),
-        ("Rebuild Spotlight index", "sudo mdutil -E /"),
-        ("Top 10 memory hogs", "ps -Arco pid,rss,comm | sort -k2 -rn | head -11"),
-        ("Clear font cache", "atsutil databases -remove"),
-        ("Open Disk Utility", "open /System/Applications/Utilities/Disk\\ Utility.app"),
-        ("Large files (>500MB) in ~", "find ~ -size +500M -not -path '*/.*' 2>/dev/null"),
-    ];
-
     plain.push("\n⚡ QUICK WIN COMMANDS".into());
 
-    for (label, cmd) in &commands {
-        println!("  {}  {}", format!("# {label}").dimmed(), "");
+    for (label, cmd) in QUICK_WIN_COMMANDS {
+        println!("  {}  ", format!("# {label}").dimmed());
         println!("  {}\n", cmd.green());
         plain.push(format!("  # {label}"));
         plain.push(format!("  {cmd}\n"));

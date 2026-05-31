@@ -34,4 +34,9 @@ pub struct Cli {
     /// Enable deeper thermal/power diagnostics (requires sudo).
     #[arg(long)]
     pub with_sudo: bool,
+
+    /// Skip the interactive fix-runner menu shown after the report.
+    /// Automatically applied when stdout is not a TTY (pipes, CI).
+    #[arg(long)]
+    pub no_interactive: bool,
 }

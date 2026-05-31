@@ -71,7 +71,7 @@ impl Checker for NetworkChecker {
                 result.add_finding(Finding::ok(format!("DNS response is fast ({dns_ms} ms).")));
             }
         } else {
-            result.add_detail("DNS Test", "Skipped (dig not available or offline)".to_string());
+            result.add_detail("DNS Test", "Skipped (dig not available or offline)");
         }
 
         // ── TCP established connections ────────────────────────────────────
@@ -110,7 +110,7 @@ impl Checker for NetworkChecker {
                     .unwrap_or("?");
 
                 if let Some(rssi_val) = rssi {
-                    result.add_detail("Wi-Fi SSID",   ssid.to_string());
+                    result.add_detail("Wi-Fi SSID",   ssid);
                     result.add_detail("Wi-Fi Signal",  format!("{rssi_val} dBm"));
 
                     if rssi_val < -80 {

@@ -66,7 +66,7 @@ impl Checker for ProcessChecker {
 
         if runaway_cpu.is_empty() && runaway_mem.is_empty() {
             result.add_finding(Finding::ok(
-                "No runaway processes detected. All processes are within normal ranges.".to_string()
+                "No runaway processes detected. All processes are within normal ranges."
             ));
         }
 
