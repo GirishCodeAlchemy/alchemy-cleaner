@@ -3,7 +3,6 @@
 /// `QUICK_WIN_COMMANDS` is the single source of truth for the 6 quick-win
 /// commands; both `reporter.rs` and this module reference it to avoid drift.
 
-use crate::checker::CheckResult;
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
 
@@ -45,7 +44,7 @@ pub const QUICK_WIN_COMMANDS: &[(&str, &str)] = &[
 ///
 /// Call only when `stdout().is_terminal()` is `true` and `--no-interactive`
 /// was not passed.
-pub fn run_interactive_menu(_results: &[CheckResult]) {
+pub fn run_interactive_menu() {
     println!(
         "\n\n{}",
         "  🔧  INTERACTIVE FIX RUNNER  ".on_blue().white().bold()

@@ -125,7 +125,7 @@ fn main() {
     // ── Interactive fix-runner — only when running in a real terminal ──────
     let interactive = is_tty && !args.no_interactive;
     if interactive {
-        actions::run_interactive_menu(&results);
+        actions::run_interactive_menu();
     }
 }
 
