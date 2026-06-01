@@ -37,7 +37,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap},
     Frame, Terminal,
 };
 
@@ -79,6 +79,28 @@ enum Mode {
     Actions,
 }
 
+// ─── Action list row types ────────────────────────────────────────────────────
+
+/// A row in the actions modal list — either a category header or a selectable item.
+enum ActionRow {
+    Header(&'static str),
+    Item(usize), // index into QUICK_WIN_COMMANDS
+}
+
+/// Pre-compute the ordered rows (category headers interleaved with items).
+fn build_action_rows() -> Vec<ActionRow> {
+    let mut rows = Vec::new();
+    let mut last_cat = "";
+    for (i, qw) in QUICK_WIN_COMMANDS.iter().enumerate() {
+        if qw.category != last_cat {
+            rows.push(ActionRow::Header(qw.category));
+            last_cat = qw.category;
+        }
+        rows.push(ActionRow::Item(i));
+    }
+    rows
+}
+
 struct App {
     // ── Scan state ─────────────────────────────────────────────────────
     checker_names: Vec<String>,
@@ -102,6 +124,12 @@ struct App {
     status_msg:     String,
     should_quit:    bool,
     pending:        Vec<usize>,
+
+    // ── Actions modal state ────────────────────────────────────────────
+    action_scroll:     usize,
+    action_flash_msg:  String,
+    action_flash_tick: u64,
+    action_rows:       Vec<ActionRow>,
 }
 
 impl App {
@@ -125,11 +153,15 @@ impl App {
             table_state,
             detail_scroll:  0,
             mode:           Mode::Browse,
-            action_checked: vec![false; QUICK_WIN_COMMANDS.len()],
-            action_cursor:  0,
-            status_msg:     String::new(),
-            should_quit:    false,
-            pending:        Vec::new(),
+            action_checked:    vec![false; QUICK_WIN_COMMANDS.len()],
+            action_cursor:     0,
+            status_msg:        String::new(),
+            should_quit:       false,
+            pending:           Vec::new(),
+            action_scroll:     0,
+            action_flash_msg:  String::new(),
+            action_flash_tick: 0,
+            action_rows:       build_action_rows(),
         }
     }
 
@@ -210,6 +242,35 @@ impl App {
         }
         (ok, warn, crit, pend)
     }
+
+    /// Clear the flash message after ~5 ticks (~400 ms).
+    fn update_flash(&mut self) {
+        if !self.action_flash_msg.is_empty()
+            && self.tick.wrapping_sub(self.action_flash_tick) > 5
+        {
+            self.action_flash_msg.clear();
+        }
+    }
+
+    /// Adjust `action_scroll` so the currently highlighted item is visible.
+    fn ensure_action_visible(&mut self, visible_h: usize) {
+        if visible_h == 0 {
+            return;
+        }
+        let cursor = self.action_cursor;
+        let pos = self
+            .action_rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| matches!(r, ActionRow::Item(i) if *i == cursor))
+            .map(|(p, _)| p)
+            .unwrap_or(0);
+        if pos < self.action_scroll {
+            self.action_scroll = pos;
+        } else if pos >= self.action_scroll + visible_h {
+            self.action_scroll = pos + 1 - visible_h;
+        }
+    }
 }
 
 // ─── Panic-safe terminal restore ─────────────────────────────────────────────
@@ -253,6 +314,7 @@ pub fn run(
 
         // 2. Advance animation counter (drives spinner, ~12.5 fps)
         app.tick = app.tick.wrapping_add(1);
+        app.update_flash();
 
         // 3. Render frame
         terminal.draw(|f| draw(f, &mut app))?;
@@ -291,6 +353,8 @@ fn on_browse_key(app: &mut App, code: KeyCode) {
             if app.health.is_some() {
                 app.mode = Mode::Actions;
                 app.action_cursor = 0;
+                app.action_scroll = 0;
+                app.action_flash_msg.clear();
                 app.status_msg.clear();
             } else {
                 app.status_msg =
@@ -316,6 +380,13 @@ fn on_actions_key(app: &mut App, code: KeyCode) {
         KeyCode::Char(' ') => {
             let i = app.action_cursor;
             app.action_checked[i] = !app.action_checked[i];
+            let label = QUICK_WIN_COMMANDS[i].label;
+            if app.action_checked[i] {
+                app.action_flash_msg = format!("✅  Selected: {label}");
+            } else {
+                app.action_flash_msg = format!("○  Deselected: {label}");
+            }
+            app.action_flash_tick = app.tick;
         }
         KeyCode::Enter => {
             let selected: Vec<usize> = app.action_checked
@@ -657,46 +728,213 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
 
 // ─── Actions modal overlay ────────────────────────────────────────────────────
 
-fn draw_actions_modal(frame: &mut Frame, app: &App, area: Rect) {
-    let modal = centered_rect(62, 68, area);
+fn draw_actions_modal(frame: &mut Frame, app: &mut App, area: Rect) {
+    let modal = centered_rect(84, 86, area);
     frame.render_widget(Clear, modal);
 
-    let items: Vec<ListItem> = QUICK_WIN_COMMANDS
+    let selected_count = app.action_checked.iter().filter(|&&b| b).count();
+    let title = if selected_count == 0 {
+        " ⚡ Quick Actions ".to_string()
+    } else {
+        format!(" ⚡ Quick Actions  ·  {selected_count} selected ")
+    };
+
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Span::styled(
+            title,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+
+    let inner = outer_block.inner(modal);
+    frame.render_widget(outer_block, modal);
+
+    // Vertical split: content rows + footer (keys + flash message)
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(2)])
+        .split(inner);
+
+    // Horizontal split: 55% scrollable list | 45% live preview
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(rows[0]);
+
+    draw_action_list(frame, app, cols[0]);
+    draw_action_preview(frame, app, cols[1]);
+    draw_action_footer(frame, app, rows[1]);
+}
+
+// ─── Actions modal helpers ────────────────────────────────────────────────────
+
+fn draw_action_list(frame: &mut Frame, app: &mut App, area: Rect) {
+    let visible_h = (area.height as usize).saturating_sub(2); // subtract borders
+    app.ensure_action_visible(visible_h);
+
+    let scroll      = app.action_scroll;
+    let cursor      = app.action_cursor;
+    let action_rows = &app.action_rows;
+    let checked     = &app.action_checked;
+
+    let items: Vec<ListItem> = action_rows
         .iter()
-        .enumerate()
-        .map(|(i, (label, cmd))| {
-            let bullet   = if app.action_checked[i] { "◉" } else { "○" };
-            let sudo_tag = if cmd.contains("sudo") { "  🔐" } else { "" };
+        .skip(scroll)
+        .take(visible_h)
+        .map(|row| match row {
+            ActionRow::Header(cat) => ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("  ── {cat} "),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD | Modifier::ITALIC),
+                ),
+            ])),
 
-            let (row_style, bullet_style) = if i == app.action_cursor {
-                (
-                    Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
-                    Style::default().fg(Color::Yellow).bg(Color::Cyan),
-                )
-            } else if app.action_checked[i] {
-                (Style::default().fg(Color::Green), Style::default().fg(Color::Green))
-            } else {
-                (Style::default().fg(Color::White), Style::default().fg(Color::DarkGray))
-            };
+            ActionRow::Item(i) => {
+                let qw         = &QUICK_WIN_COMMANDS[*i];
+                let bullet     = if checked[*i] { "◉" } else { "○" };
+                let sudo_tag   = if qw.cmd.contains("sudo") { " 🔐" } else { "" };
+                let is_cursor  = *i == cursor;
 
-            ListItem::new(Line::from(vec![
-                Span::styled(format!("  {bullet} "), bullet_style),
-                Span::styled(format!("{label}{sudo_tag}"), row_style),
-            ]))
+                let (row_sty, bul_sty) = if is_cursor {
+                    (
+                        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Yellow).bg(Color::Cyan),
+                    )
+                } else if checked[*i] {
+                    (Style::default().fg(Color::Green), Style::default().fg(Color::Green))
+                } else {
+                    (Style::default().fg(Color::White), Style::default().fg(Color::DarkGray))
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("  {bullet} "), bul_sty),
+                    Span::styled(format!("{}{}", qw.label, sudo_tag), row_sty),
+                ]))
+            }
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
-            .title(Span::styled(
-                " ⚡ Quick Actions  —  [Space] toggle  [Enter] run  [Esc] back ",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            )),
+    frame.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(Span::styled(
+                    " Commands ",
+                    Style::default().fg(Color::DarkGray),
+                )),
+        ),
+        area,
     );
+}
 
-    frame.render_widget(list, modal);
+fn draw_action_preview(frame: &mut Frame, app: &App, area: Rect) {
+    let qw          = &QUICK_WIN_COMMANDS[app.action_cursor];
+    let needs_sudo  = qw.cmd.contains("sudo");
+    let sel_count   = app.action_checked.iter().filter(|&&b| b).count();
+    let is_selected = app.action_checked[app.action_cursor];
+
+    let status_span = if is_selected {
+        Span::styled("  ◉ Selected", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled("  ○ Not selected", Style::default().fg(Color::DarkGray))
+    };
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {}", qw.label),
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(
+                format!("[{}]", qw.category),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("  {}", qw.desc),
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  Command:",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            format!("  {}", qw.cmd),
+            Style::default().fg(Color::Green),
+        )),
+    ];
+
+    if needs_sudo {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "  🔐 Requires administrator password",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(status_span));
+
+    if sel_count > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("  {sel_count} action(s) queued to run"),
+            Style::default().fg(Color::Green),
+        )));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(Span::styled(
+                        " Preview ",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+            ),
+        area,
+    );
+}
+
+fn draw_action_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let d = Span::styled("  │  ", Style::default().fg(Color::DarkGray));
+    let keys = Line::from(vec![
+        Span::styled("[↑↓]", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(" Navigate", Style::default().fg(Color::DarkGray)),
+        d.clone(),
+        Span::styled("[Space]", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(" Toggle", Style::default().fg(Color::DarkGray)),
+        d.clone(),
+        Span::styled("[Enter]", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(" Run Selected", Style::default().fg(Color::DarkGray)),
+        d.clone(),
+        Span::styled("[Esc]", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(" Back", Style::default().fg(Color::DarkGray)),
+    ]);
+
+    let hint = if !app.action_flash_msg.is_empty() {
+        Line::from(Span::styled(
+            format!("  {}", app.action_flash_msg),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ))
+    } else {
+        Line::from(Span::styled(
+            "  [Space] to toggle  ·  [Enter] to run all selected  ·  results shown after TUI exits",
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        ))
+    };
+
+    frame.render_widget(Paragraph::new(vec![keys, hint]), area);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

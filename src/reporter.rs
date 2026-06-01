@@ -240,11 +240,11 @@ fn print_quick_wins(plain: &mut Vec<String>) {
 
     plain.push("\n⚡ QUICK WIN COMMANDS".into());
 
-    for (label, cmd) in QUICK_WIN_COMMANDS {
-        println!("  {}  ", format!("# {label}").dimmed());
-        println!("  {}\n", cmd.green());
-        plain.push(format!("  # {label}"));
-        plain.push(format!("  {cmd}\n"));
+    for qw in QUICK_WIN_COMMANDS {
+        println!("  {}  ", format!("# {}", qw.label).dimmed());
+        println!("  {}\n", qw.cmd.green());
+        plain.push(format!("  # {}", qw.label));
+        plain.push(format!("  {}\n", qw.cmd));
     }
 }
 
@@ -375,9 +375,9 @@ pub fn save_report(
 
     // ── Quick wins ─────────────────────────────────────────────────────────
     lines.push("\n⚡ QUICK WIN COMMANDS".into());
-    for (label, cmd) in QUICK_WIN_COMMANDS {
-        lines.push(format!("  # {label}"));
-        lines.push(format!("  {cmd}\n"));
+    for qw in QUICK_WIN_COMMANDS {
+        lines.push(format!("  # {}", qw.label));
+        lines.push(format!("  {}\n", qw.cmd));
     }
 
     save_report_file(path, &lines)
